@@ -5,11 +5,11 @@ fn main() -> windows_service::Result<()> {
         time::{Duration, Instant},
     };
 
+    use windows::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST;
     use windows_service::{
         service::{ServiceAccess, ServiceState},
         service_manager::{ServiceManager, ServiceManagerAccess},
     };
-    use windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST;
 
     let manager_access = ServiceManagerAccess::CONNECT;
     let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;

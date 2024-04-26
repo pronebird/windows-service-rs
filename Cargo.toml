@@ -19,8 +19,8 @@ default-target = "x86_64-pc-windows-msvc"
 bitflags = "2.3"
 widestring = "1"
 
-[target.'cfg(windows)'.dependencies.windows-sys]
-version = "0.52.0"
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.54"
 features = [
     "Win32_Foundation",
     "Win32_Security",

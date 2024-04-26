@@ -1,10 +1,10 @@
-use windows_sys::Win32::{Security, System::Services};
+use windows::Win32::{Security, System::Services};
 
 /// A handle holder that wraps a low level [`Security::SC_HANDLE`].
 pub(crate) struct ScHandle(Security::SC_HANDLE);
 
 impl ScHandle {
-    pub(crate) unsafe fn new(handle: Security::SC_HANDLE) -> Self {
+    pub(crate) fn new(handle: Security::SC_HANDLE) -> Self {
         ScHandle(handle)
     }
 
@@ -16,6 +16,6 @@ impl ScHandle {
 
 impl Drop for ScHandle {
     fn drop(&mut self) {
-        unsafe { Services::CloseServiceHandle(self.0) };
+        unsafe { _ = Services::CloseServiceHandle(self.0) };
     }
 }

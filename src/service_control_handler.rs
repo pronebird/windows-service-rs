@@ -1,9 +1,8 @@
 use std::ffi::OsStr;
-use std::io;
 use std::os::raw::c_void;
 use std::os::windows::io::{AsRawHandle, RawHandle};
-use widestring::WideCString;
-use windows_sys::Win32::{
+use windows::core::HSTRING;
+use windows::Win32::{
     Foundation::{ERROR_CALL_NOT_IMPLEMENTED, NO_ERROR},
     System::Services,
 };
@@ -23,19 +22,14 @@ impl ServiceStatusHandle {
     /// Report the new service status to the system.
     pub fn set_service_status(&self, service_status: ServiceStatus) -> crate::Result<()> {
         let raw_service_status = service_status.to_raw();
-        let result = unsafe { Services::SetServiceStatus(self.0, &raw_service_status) };
-        if result == 0 {
-            Err(Error::Winapi(io::Error::last_os_error()))
-        } else {
-            Ok(())
-        }
+        unsafe { Services::SetServiceStatus(self.0, &raw_service_status).map_err(Error::Winapi) }
     }
 }
 
 impl AsRawHandle for ServiceStatusHandle {
     /// Get access to the raw handle to use in other Windows APIs
     fn as_raw_handle(&self) -> RawHandle {
-        self.0 as _
+        self.0 .0 as _
     }
 }
 
@@ -65,8 +59,8 @@ pub enum ServiceControlHandlerResult {
 impl ServiceControlHandlerResult {
     pub fn to_raw(&self) -> u32 {
         match *self {
-            ServiceControlHandlerResult::NoError => NO_ERROR,
-            ServiceControlHandlerResult::NotImplemented => ERROR_CALL_NOT_IMPLEMENTED,
+            ServiceControlHandlerResult::NoError => NO_ERROR.0,
+            ServiceControlHandlerResult::NotImplemented => ERROR_CALL_NOT_IMPLEMENTED.0,
             ServiceControlHandlerResult::Other(code) => code,
         }
     }
@@ -113,22 +107,19 @@ where
     // Important: leak the Box<F> which will be released in `service_control_handler`.
     let context: *mut F = Box::into_raw(heap_event_handler);
 
-    let service_name = WideCString::from_os_str(service_name)
-        .map_err(|_| Error::ArgumentHasNulByte("service name"))?;
-    let status_handle = unsafe {
+    match unsafe {
         Services::RegisterServiceCtrlHandlerExW(
-            service_name.as_ptr(),
+            &HSTRING::from(service_name.as_ref()),
             Some(service_control_handler::<F>),
-            context as *mut c_void,
+            Some(context as _),
         )
-    };
-
-    if status_handle == 0 {
-        // Release the `event_handler` in case of an error.
-        let _: Box<F> = unsafe { Box::from_raw(context) };
-        Err(Error::Winapi(io::Error::last_os_error()))
-    } else {
-        Ok(ServiceStatusHandle::from_handle(status_handle))
+    } {
+        Ok(status_handle) => Ok(ServiceStatusHandle::from_handle(status_handle)),
+        Err(e) => {
+            // Release the `event_handler` in case of an error.
+            let _: Box<F> = unsafe { Box::from_raw(context) };
+            Err(Error::Winapi(e))
+        }
     }
 }
 

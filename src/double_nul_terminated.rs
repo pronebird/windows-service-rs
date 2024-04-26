@@ -1,6 +1,6 @@
 use std::ffi::{OsStr, OsString};
 use widestring::{error::ContainsNul, WideCStr, WideCString, WideString};
-use windows_sys::core::PWSTR;
+use windows::core::PWSTR;
 
 /// A helper to join a slice of `OsStr`s into a nul-separated `WideString` ending with two nul
 /// wide characters.
@@ -40,7 +40,7 @@ pub unsafe fn parse_str_ptr(double_nul_terminated_string: PWSTR) -> Vec<OsString
     let mut results: Vec<OsString> = Vec::new();
 
     if !double_nul_terminated_string.is_null() {
-        let mut next = double_nul_terminated_string;
+        let mut next = double_nul_terminated_string.0;
         loop {
             let element = WideCStr::from_ptr_str(next);
             if element.is_empty() {
@@ -80,19 +80,19 @@ mod tests {
     #[test]
     fn test_nul_byte_string() {
         let mut raw_data: Vec<u16> = vec![0];
-        assert!(unsafe { parse_str_ptr(raw_data.as_mut_ptr()) }.is_empty());
+        assert!(unsafe { parse_str_ptr(PWSTR::from_raw(raw_data.as_mut_ptr())) }.is_empty());
     }
 
     #[test]
     fn test_nul_ptr_string() {
-        assert!(unsafe { parse_str_ptr(::std::ptr::null_mut()) }.is_empty());
+        assert!(unsafe { parse_str_ptr(PWSTR::null()) }.is_empty());
     }
 
     #[test]
     fn test_with_values() {
         let mut raw_data = WideString::from_str("Hello\0World\0\0").into_vec();
         assert_eq!(
-            unsafe { parse_str_ptr(raw_data.as_mut_ptr()) },
+            unsafe { parse_str_ptr(PWSTR::from_raw(raw_data.as_mut_ptr())) },
             vec![OsString::from("Hello"), OsString::from("World")]
         );
     }

@@ -7,8 +7,11 @@ use std::ptr;
 use std::time::Duration;
 use std::{io, mem};
 
+use widestring::U16CString;
 use widestring::{error::ContainsNul, WideCStr, WideCString, WideString};
-use windows_sys::{
+use windows::core::PCWSTR;
+use windows::Win32::System::Services::{SC_ACTION_TYPE, SERVICE_CONFIG};
+use windows::{
     core::GUID,
     Win32::{
         Foundation::{ERROR_SERVICE_SPECIFIC_ERROR, NO_ERROR},
@@ -28,22 +31,22 @@ bitflags::bitflags! {
     #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Clone, Copy)]
     pub struct ServiceType: u32 {
         /// File system driver service.
-        const FILE_SYSTEM_DRIVER = Services::SERVICE_FILE_SYSTEM_DRIVER;
+        const FILE_SYSTEM_DRIVER = Services::SERVICE_FILE_SYSTEM_DRIVER.0;
 
         /// Driver service.
-        const KERNEL_DRIVER = Services::SERVICE_KERNEL_DRIVER;
+        const KERNEL_DRIVER = Services::SERVICE_KERNEL_DRIVER.0;
 
         /// Service that runs in its own process.
-        const OWN_PROCESS = Services::SERVICE_WIN32_OWN_PROCESS;
+        const OWN_PROCESS = Services::SERVICE_WIN32_OWN_PROCESS.0;
 
         /// Service that shares a process with one or more other services.
-        const SHARE_PROCESS = Services::SERVICE_WIN32_SHARE_PROCESS;
+        const SHARE_PROCESS = Services::SERVICE_WIN32_SHARE_PROCESS.0;
 
         /// The service runs in its own process under the logged-on user account.
-        const USER_OWN_PROCESS = Services::SERVICE_USER_OWN_PROCESS;
+        const USER_OWN_PROCESS = Services::SERVICE_USER_OWN_PROCESS.0;
 
         /// The service shares a process with one or more other services that run under the logged-on user account.
-        const USER_SHARE_PROCESS = Services::SERVICE_USER_SHARE_PROCESS;
+        const USER_SHARE_PROCESS = Services::SERVICE_USER_SHARE_PROCESS.0;
 
         /// The service can be interactive.
         const INTERACTIVE_PROCESS = SystemServices::SERVICE_INTERACTIVE_PROCESS;
@@ -70,7 +73,7 @@ bitflags::bitflags! {
         const INTERROGATE = Services::SERVICE_INTERROGATE;
 
         /// Can delete the service
-        const DELETE = FileSystem::DELETE;
+        const DELETE = FileSystem::DELETE.0;
 
         /// Can query the services configuration
         const QUERY_CONFIG = Services::SERVICE_QUERY_CONFIG;
@@ -91,17 +94,17 @@ bitflags::bitflags! {
 #[repr(u32)]
 pub enum ServiceStartType {
     /// Autostart on system startup
-    AutoStart = Services::SERVICE_AUTO_START,
+    AutoStart = Services::SERVICE_AUTO_START.0,
     /// Service is enabled, can be started manually
-    OnDemand = Services::SERVICE_DEMAND_START,
+    OnDemand = Services::SERVICE_DEMAND_START.0,
     /// Disabled service
-    Disabled = Services::SERVICE_DISABLED,
+    Disabled = Services::SERVICE_DISABLED.0,
     /// Driver start on system startup.
     /// This start type is only applicable to driver services.
-    SystemStart = Services::SERVICE_SYSTEM_START,
+    SystemStart = Services::SERVICE_SYSTEM_START.0,
     /// Driver start on OS boot.
     /// This start type is only applicable to driver services.
-    BootStart = Services::SERVICE_BOOT_START,
+    BootStart = Services::SERVICE_BOOT_START.0,
 }
 
 impl ServiceStartType {
@@ -127,10 +130,10 @@ impl ServiceStartType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum ServiceErrorControl {
-    Critical = Services::SERVICE_ERROR_CRITICAL,
-    Ignore = Services::SERVICE_ERROR_IGNORE,
-    Normal = Services::SERVICE_ERROR_NORMAL,
-    Severe = Services::SERVICE_ERROR_SEVERE,
+    Critical = Services::SERVICE_ERROR_CRITICAL.0,
+    Ignore = Services::SERVICE_ERROR_IGNORE.0,
+    Normal = Services::SERVICE_ERROR_NORMAL.0,
+    Severe = Services::SERVICE_ERROR_SEVERE.0,
 }
 
 impl ServiceErrorControl {
@@ -191,10 +194,10 @@ impl ServiceDependency {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum ServiceActionType {
-    None = Services::SC_ACTION_NONE,
-    Reboot = Services::SC_ACTION_REBOOT,
-    Restart = Services::SC_ACTION_RESTART,
-    RunCommand = Services::SC_ACTION_RUN_COMMAND,
+    None = Services::SC_ACTION_NONE.0,
+    Reboot = Services::SC_ACTION_REBOOT.0,
+    Restart = Services::SC_ACTION_RESTART.0,
+    RunCommand = Services::SC_ACTION_RUN_COMMAND.0,
 }
 
 impl ServiceActionType {
@@ -233,7 +236,7 @@ pub struct ServiceAction {
 impl ServiceAction {
     pub fn from_raw(raw: Services::SC_ACTION) -> crate::Result<ServiceAction> {
         Ok(ServiceAction {
-            action_type: ServiceActionType::from_raw(raw.Type)
+            action_type: ServiceActionType::from_raw(raw.Type.0)
                 .map_err(|e| Error::ParseValue("service action type", e))?,
             delay: Duration::from_millis(raw.Delay as u64),
         })
@@ -241,7 +244,7 @@ impl ServiceAction {
 
     pub fn to_raw(&self) -> Services::SC_ACTION {
         Services::SC_ACTION {
-            Type: self.action_type.to_raw(),
+            Type: SC_ACTION_TYPE(self.action_type.to_raw()),
             Delay: u32::try_from(self.delay.as_millis()).expect("Too long delay"),
         }
     }
@@ -322,10 +325,28 @@ impl ServiceFailureActions {
     pub unsafe fn from_raw(
         raw: Services::SERVICE_FAILURE_ACTIONSW,
     ) -> crate::Result<ServiceFailureActions> {
-        let reboot_msg = ptr::NonNull::new(raw.lpRebootMsg)
-            .map(|wrapped_ptr| WideCStr::from_ptr_str(wrapped_ptr.as_ptr()).to_os_string());
-        let command = ptr::NonNull::new(raw.lpCommand)
-            .map(|wrapped_ptr| WideCStr::from_ptr_str(wrapped_ptr.as_ptr()).to_os_string());
+        let reboot_msg = if raw.lpRebootMsg.is_null() {
+            None
+        } else {
+            Some(
+                raw.lpRebootMsg
+                    .to_hstring()
+                    .map_err(Error::Winapi)?
+                    .to_os_string(),
+            )
+        };
+
+        let command = if raw.lpCommand.is_null() {
+            None
+        } else {
+            Some(
+                raw.lpCommand
+                    .to_hstring()
+                    .map_err(Error::Winapi)?
+                    .to_os_string(),
+            )
+        };
+
         let reset_period = ServiceFailureResetPeriod::from_raw(raw.dwResetPeriod);
 
         let actions: Option<Vec<ServiceAction>> = if raw.lpsaActions.is_null() {
@@ -387,6 +408,53 @@ pub struct ServiceInfo {
     /// Account password.
     /// For system accounts this should normally be `None`.
     pub account_password: Option<OsString>,
+}
+
+impl ServiceInfo {
+    pub(crate) fn raw_dependencies(&self) -> crate::Result<Option<WideString>> {
+        let dependency_identifiers: Vec<OsString> = self
+            .dependencies
+            .iter()
+            .map(|dependency| dependency.to_system_identifier())
+            .collect();
+        double_nul_terminated::from_slice(&dependency_identifiers)
+            .map_err(|_| Error::ArgumentHasNulByte("dependency"))
+    }
+
+    pub(crate) fn raw_launch_command(&self) -> crate::Result<U16CString> {
+        // escape executable path and arguments and combine them into a single command
+        let mut launch_command_buffer = WideString::new();
+        if self
+            .service_type
+            .intersects(ServiceType::KERNEL_DRIVER | ServiceType::FILE_SYSTEM_DRIVER)
+        {
+            // drivers do not support launch arguments
+            if !self.launch_arguments.is_empty() {
+                return Err(Error::LaunchArgumentsNotSupported);
+            }
+
+            // also the path must not be quoted even if it contains spaces
+            let executable_path = WideCString::from_os_str(&self.executable_path)
+                .map_err(|_| Error::ArgumentHasNulByte("executable path"))?;
+            launch_command_buffer.push(executable_path.to_ustring());
+        } else {
+            let executable_path = escape_wide(&self.executable_path)
+                .map_err(|_| Error::ArgumentHasNulByte("executable path"))?;
+            launch_command_buffer.push(executable_path);
+
+            for (i, launch_argument) in self.launch_arguments.iter().enumerate() {
+                let wide = escape_wide(launch_argument)
+                    .map_err(|_| Error::ArgumentArrayElementHasNulByte("launch argument", i))?;
+
+                launch_command_buffer.push_str(" ");
+                launch_command_buffer.push(wide);
+            }
+        }
+
+        // Safety: We are sure launch_command_buffer does not contain nulls
+        let launch_command = unsafe { WideCString::from_ustr_unchecked(launch_command_buffer) };
+        Ok(launch_command)
+    }
 }
 
 /// Same as `ServiceInfo` but with fields that are compatible with the Windows API.
@@ -612,9 +680,9 @@ impl HardwareProfileChangeParam {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum PowerSource {
-    Ac = Power::PoAc,
-    Dc = Power::PoDc,
-    Hot = Power::PoHot,
+    Ac = Power::PoAc.0,
+    Dc = Power::PoDc.0,
+    Hot = Power::PoHot.0,
 }
 
 impl PowerSource {
@@ -637,9 +705,9 @@ impl PowerSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum DisplayState {
-    Off = SystemServices::PowerMonitorOff,
-    On = SystemServices::PowerMonitorOn,
-    Dimmed = SystemServices::PowerMonitorDim,
+    Off = SystemServices::PowerMonitorOff.0,
+    On = SystemServices::PowerMonitorOn.0,
+    Dimmed = SystemServices::PowerMonitorDim.0,
 }
 
 impl DisplayState {
@@ -663,8 +731,8 @@ impl DisplayState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i32)]
 pub enum UserStatus {
-    Present = Power::PowerUserPresent,
-    Inactive = Power::PowerUserInactive,
+    Present = Power::PowerUserPresent.0,
+    Inactive = Power::PowerUserInactive.0,
 }
 
 impl UserStatus {
@@ -1175,13 +1243,13 @@ impl ServiceControl {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum ServiceState {
-    Stopped = Services::SERVICE_STOPPED,
-    StartPending = Services::SERVICE_START_PENDING,
-    StopPending = Services::SERVICE_STOP_PENDING,
-    Running = Services::SERVICE_RUNNING,
-    ContinuePending = Services::SERVICE_CONTINUE_PENDING,
-    PausePending = Services::SERVICE_PAUSE_PENDING,
-    Paused = Services::SERVICE_PAUSED,
+    Stopped = Services::SERVICE_STOPPED.0,
+    StartPending = Services::SERVICE_START_PENDING.0,
+    StopPending = Services::SERVICE_STOP_PENDING.0,
+    Running = Services::SERVICE_RUNNING.0,
+    ContinuePending = Services::SERVICE_CONTINUE_PENDING.0,
+    PausePending = Services::SERVICE_PAUSE_PENDING.0,
+    Paused = Services::SERVICE_PAUSED.0,
 }
 
 impl ServiceState {
@@ -1225,7 +1293,7 @@ pub enum ServiceExitCode {
 
 impl ServiceExitCode {
     /// A `ServiceExitCode` indicating success, no errors.
-    pub const NO_ERROR: Self = ServiceExitCode::Win32(NO_ERROR);
+    pub const NO_ERROR: Self = ServiceExitCode::Win32(NO_ERROR.0);
 
     fn copy_to(&self, raw_service_status: &mut Services::SERVICE_STATUS) {
         match *self {
@@ -1234,7 +1302,7 @@ impl ServiceExitCode {
                 raw_service_status.dwServiceSpecificExitCode = 0;
             }
             ServiceExitCode::ServiceSpecific(service_error_code) => {
-                raw_service_status.dwWin32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR;
+                raw_service_status.dwWin32ExitCode = ERROR_SERVICE_SPECIFIC_ERROR.0;
                 raw_service_status.dwServiceSpecificExitCode = service_error_code;
             }
         }
@@ -1249,7 +1317,7 @@ impl Default for ServiceExitCode {
 
 impl<'a> From<&'a Services::SERVICE_STATUS> for ServiceExitCode {
     fn from(service_status: &'a Services::SERVICE_STATUS) -> Self {
-        if service_status.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR {
+        if service_status.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR.0 {
             ServiceExitCode::ServiceSpecific(service_status.dwServiceSpecificExitCode)
         } else {
             ServiceExitCode::Win32(service_status.dwWin32ExitCode)
@@ -1259,7 +1327,7 @@ impl<'a> From<&'a Services::SERVICE_STATUS> for ServiceExitCode {
 
 impl<'a> From<&'a Services::SERVICE_STATUS_PROCESS> for ServiceExitCode {
     fn from(service_status: &'a Services::SERVICE_STATUS_PROCESS) -> Self {
-        if service_status.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR {
+        if service_status.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR.0 {
             ServiceExitCode::ServiceSpecific(service_status.dwServiceSpecificExitCode)
         } else {
             ServiceExitCode::Win32(service_status.dwWin32ExitCode)
@@ -1365,9 +1433,10 @@ pub struct ServiceStatus {
 
 impl ServiceStatus {
     pub(crate) fn to_raw(&self) -> Services::SERVICE_STATUS {
-        let mut raw_status = unsafe { mem::zeroed::<Services::SERVICE_STATUS>() };
-        raw_status.dwServiceType = self.service_type.bits();
-        raw_status.dwCurrentState = self.current_state.to_raw();
+        let mut raw_status = Services::SERVICE_STATUS::default();
+        raw_status.dwServiceType = Services::ENUM_SERVICE_TYPE(self.service_type.bits());
+        raw_status.dwCurrentState =
+            Services::SERVICE_STATUS_CURRENT_STATE(self.current_state.to_raw());
         raw_status.dwControlsAccepted = self.controls_accepted.bits();
 
         self.exit_code.copy_to(&mut raw_status);
@@ -1387,8 +1456,8 @@ impl ServiceStatus {
     /// Returns an error if the `dwCurrentState` field does not represent a valid [`ServiceState`].
     fn from_raw(raw: Services::SERVICE_STATUS) -> Result<Self, ParseRawError> {
         Ok(ServiceStatus {
-            service_type: ServiceType::from_bits_truncate(raw.dwServiceType),
-            current_state: ServiceState::from_raw(raw.dwCurrentState)?,
+            service_type: ServiceType::from_bits_truncate(raw.dwServiceType.0),
+            current_state: ServiceState::from_raw(raw.dwCurrentState.0)?,
             controls_accepted: ServiceControlAccept::from_bits_truncate(raw.dwControlsAccepted),
             exit_code: ServiceExitCode::from(&raw),
             checkpoint: raw.dwCheckPoint,
@@ -1403,13 +1472,13 @@ impl ServiceStatus {
     ///
     /// Returns an error if the `dwCurrentState` field does not represent a valid [`ServiceState`].
     fn from_raw_ex(raw: Services::SERVICE_STATUS_PROCESS) -> Result<Self, ParseRawError> {
-        let current_state = ServiceState::from_raw(raw.dwCurrentState)?;
+        let current_state = ServiceState::from_raw(raw.dwCurrentState.0)?;
         let process_id = match current_state {
             ServiceState::Running => Some(raw.dwProcessId),
             _ => None,
         };
         Ok(ServiceStatus {
-            service_type: ServiceType::from_bits_truncate(raw.dwServiceType),
+            service_type: ServiceType::from_bits_truncate(raw.dwServiceType.0),
             current_state,
             controls_accepted: ServiceControlAccept::from_bits_truncate(raw.dwControlsAccepted),
             exit_code: ServiceExitCode::from(&raw),
@@ -1473,23 +1542,17 @@ impl Service {
             })
             .collect::<crate::Result<Vec<WideCString>>>()?;
 
-        let raw_service_arguments: Vec<*const u16> = wide_service_arguments
+        let raw_service_arguments: Vec<PCWSTR> = wide_service_arguments
             .iter()
-            .map(|s| s.as_ptr() as _)
+            .map(|s| PCWSTR::from_raw(s.as_ptr()))
             .collect();
 
-        let success = unsafe {
+        unsafe {
             Services::StartServiceW(
                 self.service_handle.raw_handle(),
-                raw_service_arguments.len() as u32,
-                raw_service_arguments.as_ptr(),
+                Some(&raw_service_arguments),
             )
-        };
-
-        if success == 0 {
-            Err(Error::Winapi(io::Error::last_os_error()))
-        } else {
-            Ok(())
+            .map_err(Error::Winapi)
         }
     }
 
@@ -1555,12 +1618,7 @@ impl Service {
     /// is removed when the system is restarted. This function will return an error if the service
     /// has already been marked for deletion.
     pub fn delete(&self) -> crate::Result<()> {
-        let success = unsafe { Services::DeleteService(self.service_handle.raw_handle()) };
-        if success == 0 {
-            Err(Error::Winapi(io::Error::last_os_error()))
-        } else {
-            Ok(())
-        }
+        unsafe { Services::DeleteService(self.service_handle.raw_handle()).map_err(Error::Winapi) }
     }
 
     /// Get the service config from the system.
@@ -1569,22 +1627,17 @@ impl Service {
         let mut data = vec![0u8; MAX_QUERY_BUFFER_SIZE];
         let mut bytes_written: u32 = 0;
 
-        let success = unsafe {
+        unsafe {
             Services::QueryServiceConfigW(
                 self.service_handle.raw_handle(),
                 data.as_mut_ptr() as _,
                 data.len() as u32,
                 &mut bytes_written,
-            )
+            ).map_err(Error::Winapi)?;
         };
 
-        if success == 0 {
-            Err(Error::Winapi(io::Error::last_os_error()))
-        } else {
-            unsafe {
-                let raw_config = data.as_ptr() as *const Services::QUERY_SERVICE_CONFIGW;
-                ServiceConfig::from_raw(*raw_config)
-            }
+        unsafe {
+            let raw_config = data.as_ptr() as *const Services::QUERY_SERVICE_CONFIGW;
         }
     }
 
@@ -1644,7 +1697,7 @@ impl Service {
 
         unsafe {
             self.change_config2(
-                Services::SERVICE_CONFIG_FAILURE_ACTIONS_FLAG,
+                Services::SERVICE_CONFIG_FAILURE_ACTIONS_FLAG.0,
                 &mut raw_failure_actions_flag,
             )
             .map_err(Error::Winapi)
@@ -1674,7 +1727,7 @@ impl Service {
         // single member that specifies the new SID type as a `u32`, and as
         // such, we can get away with not explicitly creating a structure and
         // instead re-using `ServiceSidType` that is `repr(u32)`.
-        unsafe { self.query_config2(Services::SERVICE_CONFIG_SERVICE_SID_INFO, &mut data) }
+        unsafe { self.query_config2(Services::SERVICE_CONFIG_SERVICE_SID_INFO.0, &mut data) }
             .map_err(Error::Winapi)
     }
 
@@ -1692,7 +1745,7 @@ impl Service {
         // we can get away with not explicitly creating a structure in Rust.
         unsafe {
             self.change_config2(
-                Services::SERVICE_CONFIG_SERVICE_SID_INFO,
+                Services::SERVICE_CONFIG_SERVICE_SID_INFO.0,
                 &mut service_sid_type,
             )
             .map_err(Error::Winapi)
@@ -1705,7 +1758,7 @@ impl Service {
             let mut data = vec![0u8; MAX_QUERY_BUFFER_SIZE];
 
             let raw_failure_actions: Services::SERVICE_FAILURE_ACTIONSW = self
-                .query_config2(Services::SERVICE_CONFIG_FAILURE_ACTIONS, &mut data)
+                .query_config2(Services::SERVICE_CONFIG_FAILURE_ACTIONS.0, &mut data)
                 .map_err(Error::Winapi)?;
 
             ServiceFailureActions::from_raw(raw_failure_actions)
@@ -1857,53 +1910,39 @@ impl Service {
     /// Private helper to send the control commands to the system.
     fn send_control_command(&self, command: ServiceControl) -> crate::Result<ServiceStatus> {
         let mut raw_status = unsafe { mem::zeroed::<Services::SERVICE_STATUS>() };
-        let success = unsafe {
+        unsafe {
             Services::ControlService(
                 self.service_handle.raw_handle(),
                 command.raw_service_control_type(),
                 &mut raw_status,
-            )
+            ).map_err(Error::Winapi)?;
         };
 
-        if success == 0 {
-            Err(Error::Winapi(io::Error::last_os_error()))
-        } else {
-            ServiceStatus::from_raw(raw_status).map_err(|e| Error::ParseValue("service status", e))
-        }
+        ServiceStatus::from_raw(raw_status).map_err(|e| Error::ParseValue("service status", e))
     }
 
     /// Private helper to query the optional configuration parameters of windows services.
-    unsafe fn query_config2<T: Copy>(&self, kind: u32, data: &mut [u8]) -> io::Result<T> {
+    unsafe fn query_config2<T: Copy>(&self, kind: u32, data: &mut [u8]) -> windows::core::Result<T> {
         let mut bytes_written: u32 = 0;
 
-        let success = Services::QueryServiceConfig2W(
+        Services::QueryServiceConfig2W(
             self.service_handle.raw_handle(),
             kind,
             data.as_mut_ptr() as _,
             data.len() as u32,
             &mut bytes_written,
-        );
+        )?;
 
-        if success == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(*(data.as_ptr() as *const _))
-        }
+        Ok(*(data.as_ptr() as *const _))
     }
 
     /// Private helper to update the optional configuration parameters of windows services.
-    unsafe fn change_config2<T>(&self, kind: u32, data: &mut T) -> io::Result<()> {
-        let success = Services::ChangeServiceConfig2W(
+    unsafe fn change_config2<T>(&self, kind: u32, data: &T) -> windows::core::Result<()> {
+        Services::ChangeServiceConfig2W(
             self.service_handle.raw_handle(),
-            kind,
-            data as *mut _ as *mut _,
-        );
-
-        if success == 0 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+            SERVICE_CONFIG(kind),
+            Some(data as *mut _ as *mut _),
+        )
     }
 }
 

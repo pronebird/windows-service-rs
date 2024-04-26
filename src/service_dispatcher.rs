@@ -1,8 +1,9 @@
 use std::ffi::{OsStr, OsString};
-use std::{io, ptr};
 
-use widestring::{WideCStr, WideCString};
-use windows_sys::Win32::System::Services;
+use widestring::WideCStr;
+use windows::core::HSTRING;
+use windows::core::PWSTR;
+use windows::Win32::System::Services;
 
 use crate::{Error, Result};
 
@@ -39,16 +40,14 @@ macro_rules! define_windows_service {
     ($function_name:ident, $service_main_handler:ident) => {
         /// Static callback used by the system to bootstrap the service.
         /// Do not call it directly.
-        extern "system" fn $function_name(
+        unsafe extern "system" fn $function_name(
             num_service_arguments: u32,
-            service_arguments: *mut *mut u16,
+            service_arguments: *mut PWSTR,
         ) {
-            let arguments = unsafe {
-                $crate::service_dispatcher::parse_service_arguments(
-                    num_service_arguments,
-                    service_arguments,
-                )
-            };
+            let arguments = $crate::service_dispatcher::parse_service_arguments(
+                num_service_arguments,
+                service_arguments,
+            );
 
             $service_main_handler(arguments);
         }
@@ -89,39 +88,33 @@ macro_rules! define_windows_service {
 /// ```
 pub fn start(
     service_name: impl AsRef<OsStr>,
-    service_main: extern "system" fn(u32, *mut *mut u16),
+    service_main: unsafe extern "system" fn(u32, *mut PWSTR),
 ) -> Result<()> {
-    let service_name = WideCString::from_os_str(service_name)
-        .map_err(|_| Error::ArgumentHasNulByte("service name"))?;
+    let service_name = HSTRING::from(service_name.as_ref());
     let service_table: &[Services::SERVICE_TABLE_ENTRYW] = &[
         Services::SERVICE_TABLE_ENTRYW {
-            lpServiceName: service_name.as_ptr() as _,
+            lpServiceName: windows::core::PWSTR::from_raw(service_name.as_ptr() as _),
             lpServiceProc: Some(service_main),
         },
         // the last item has to be { null, null }
         Services::SERVICE_TABLE_ENTRYW {
-            lpServiceName: ptr::null_mut(),
+            lpServiceName: PWSTR::null(),
             lpServiceProc: None,
         },
     ];
 
-    let result = unsafe { Services::StartServiceCtrlDispatcherW(service_table.as_ptr()) };
-    if result == 0 {
-        Err(Error::Winapi(io::Error::last_os_error()))
-    } else {
-        Ok(())
-    }
+    unsafe { Services::StartServiceCtrlDispatcherW(service_table.as_ptr()).map_err(Error::Winapi) }
 }
 
 /// Parse raw arguments received in `service_main` into `Vec<OsString>`.
 ///
 /// This is an implementation detail and *should not* be called directly!
 #[doc(hidden)]
-pub unsafe fn parse_service_arguments(argc: u32, argv: *mut *mut u16) -> Vec<OsString> {
+pub unsafe fn parse_service_arguments(argc: u32, argv: *mut PWSTR) -> Vec<OsString> {
     (0..argc)
         .map(|i| {
-            let array_element_ptr: *mut *mut u16 = argv.offset(i as isize);
-            WideCStr::from_ptr_str(*array_element_ptr).to_os_string()
+            let array_element_ptr: *mut PWSTR = argv.offset(i as isize);
+            WideCStr::from_ptr_str((*array_element_ptr).0).to_os_string()
         })
         .collect()
 }

@@ -190,7 +190,7 @@ pub enum Error {
     /// An argument array contains a nul byte in element at the given index
     ArgumentArrayElementHasNulByte(&'static str, usize),
     /// IO error in winapi call
-    Winapi(std::io::Error),
+    Winapi(windows::core::Error),
 }
 
 impl std::error::Error for Error {
